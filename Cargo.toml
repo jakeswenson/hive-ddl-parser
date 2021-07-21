@@ -1,0 +1,23 @@
+[package]
+name = "hive-ddl-parser"
+version = "0.1.0"
+authors = ["Jake Swenson <jake@jakeswenson.com>"]
+edition = "2018"
+
+[lib]
+name = "hive_ddl_parser"
+# "cdylib" is necessary to produce a shared library for Python to import from.
+#
+# Downstream Rust code (including code in `bin/`, `examples/`, and `tests/`) will not be able
+# to `use string_sum;` unless the "rlib" or "lib" crate type is also included, e.g.:
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pest = "2.1"
+pest_derive = "2.1"
+pyo3 = "0.13.2"
+snafu = "0.6.10"
+anyhow = "1.0.39"
+
+[features]
+default = ["pyo3/extension-module"]

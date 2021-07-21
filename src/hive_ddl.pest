@@ -1,0 +1,226 @@
+// https://cwiki.apache.org/confluence/display/Hive/LanguageManual+DDL
+if_not_exists = _{ ^"IF" ~ ^"NOT" ~ ^"EXISTS" }
+create_table_keywords = _{ ^"CREATE" ~ ^"TEMPORARY"? ~ ^"EXTERNAL"? ~ ^"TABLE" ~ if_not_exists? }
+
+number = @{
+    "-"?
+    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+    ~ ("." ~ ASCII_DIGIT*)?
+    ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+// https://issues.apache.org/jira/secure/attachment/12618321/QuotedIdentifier.html
+REGEX_COMPONENT = @{
+  'a'..'z' | 'A'..'Z' | '0'..'9' | "_"
+  | "+" | "*" | "?" | "-" | "."
+  | "(" | ")" | "[" | "]" | "{" | "}"
+  | "^" | "|" | "$" | "/"
+}
+
+plain_identifier = @{ (ASCII_ALPHA | ASCII_DIGIT) ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
+
+identifier = @{
+  plain_identifier
+  | "`" ~ (!"`" ~ REGEX_COMPONENT)+ ~ "`"
+}
+
+single_quote = _{ "'" }
+double_quote = _{ "\"" }
+
+string_escape = _{ "\\" }
+
+STRING = @{
+    single_quote ~ ( string_escape ~ ANY | !single_quote ~ ANY )* ~ single_quote
+  | double_quote ~ ( string_escape ~ ANY | !double_quote ~ ANY )* ~ double_quote
+}
+
+ddl_comment = {
+  ^"COMMENT" ~ STRING
+}
+
+database_name = @{ identifier }
+table_name = @{ identifier }
+column_name = @{ identifier }
+
+primitive_type = {
+  ^"TINYINT"
+  | ^"SMALLINT"
+  | ^"INT"
+  | ^"BIGINT"
+  | ^"BOOLEAN"
+  | ^"FLOAT"
+  | ^"DOUBLE" ~ "PRECISION"?
+  | ^"STRING"
+  | ^"BINARY"
+  | ^"TIMESTAMP"
+  | ^"DECIMAL" ~ ("(" ~ number ~ ("," ~ number)? ~ ")")?
+  | ^"DATE"
+  | ^"VARCHAR"
+  | ^"CHAR"
+}
+
+array_type = {
+  ^"array" ~ "<" ~ data_type ~ ">"
+}
+
+map_type = {
+  ^"map" ~ "<" ~ primitive_type ~ "," ~ data_type ~ ">"
+}
+
+struct_field = {
+  column_name ~ ":" ~ data_type ~ ddl_comment?
+}
+
+struct_type = {
+  ^"struct" ~ "<" ~ struct_field ~ ("," ~ struct_field)? ~ ">"
+}
+
+data_type = {
+  primitive_type
+  | array_type
+  | map_type
+  | struct_type
+}
+
+column_constraint = {
+  ^"UNIQUE"
+  | ^"PRIMARY" ~ ^"KEY"
+  | ^"NOT" ~ ^"NULL"
+  | ^"DEFAULT" ~ default_value
+}
+
+default_value = {
+  "CURRENT_USER()" | "CURRENT_DATE()" | "CURRENT_TIMESTAMP()" | ^"NULL"
+  | STRING | NUMBER
+}
+
+table_column = {
+  column_name ~ data_type ~ column_constraint? ~ ddl_comment?
+}
+
+table_constraint = {
+  "," ~ ^"PRIMARY" ~ ^"KEY" ~ "(" ~ column_name ~ ("," ~ column_name)* ~ ")"
+  ~ (^"DISABLE" ~ ^"NOVALIDATE")?
+}
+
+partition_column = {
+  column_name ~ data_type ~ ddl_comment?
+}
+
+partitioned_by = {
+  ^"PARTITIONED" ~ ^"BY" ~ "(" ~ partition_column ~ ("," ~ partition_column)* ~ ")"
+}
+
+serde_name = @{ STRING }
+
+serde_property_name = @{ STRING }
+serde_property_value = @{ STRING }
+
+serde_property = {
+  serde_property_name ~ "=" ~ serde_property_value
+}
+
+serde_properties = {
+  serde_property ~ ("," ~ serde_property)*
+}
+
+row_format_serde = {
+  ^"SERDE" ~ serde_name ~ (^"WITH" ~ "SERDEPROPERTIES" ~ "(" ~ serde_properties ~ ")")?
+}
+
+row_format = {
+  ^"ROW" ~ ^"FORMAT" ~ row_format_serde
+}
+
+input_format_classname = @{STRING}
+output_format_classname = @{STRING}
+
+file_format = { ^"INPUTFORMAT" ~ input_format_classname ~ ^"OUTPUTFORMAT" ~ output_format_classname }
+
+stored_as = { ^"STORED" ~ ^"AS" ~ file_format }
+
+location = @{ STRING }
+table_location = { ^"LOCATION" ~ location }
+
+table_property = {
+  STRING ~ "=" ~ STRING
+}
+
+table_properties = {
+  "TBLPROPERTIES" ~ "("
+    ~ table_property
+    ~ ("," ~ table_property)*
+  ~ ")"
+}
+
+create_table = { WHITESPACE* ~
+  create_table_keywords ~ (database_name ~ ".")? ~ table_name
+  ~ ( "("
+    ~ table_column ~ ("," ~ table_column)*
+    ~ table_constraint?
+  ~ ")" )?
+  ~ ddl_comment?
+  ~ partitioned_by?
+  ~ row_format?
+  ~ stored_as?
+  ~ table_location?
+  ~ table_properties?
+  ~ WHITESPACE* }
+
+
+///////////////////////////////////////////////////////////
+////////////        SELECT STATEMENTS         /////////////
+///////////////////////////////////////////////////////////
+select_value = {
+  "(" ~ (select_statement | (!")" ~ ANY)* ) ~ ")"
+  | (!("," | WHITESPACE* ~ ^"FROM") ~ ANY)*
+}
+
+
+inner_join = { (^"INNER" | ^"CROSS")? ~ "JOIN" }
+outer_join = { (^"LEFT"|^"RIGHT"|^"FULL") ~ (^"OUTER" | ^"SEMI")? ~ "JOIN" }
+
+join_table = {
+     inner_join ~ table_factor ~ join_condition?
+  |  outer_join ~ table_factor ~ join_condition
+}
+
+tbl_name = { (database_name ~ ".") ~ table_name }
+alias = @{ plain_identifier }
+
+table_factor = {
+    tbl_name ~ alias
+  | "(" ~ select_statement ~ ")" ~ alias
+  | "(" ~ table_factor ~ ("," ~ table_factor) ~ ")"
+}
+
+expression = {
+  (!(inner_join|outer_join|";") ~ ANY)*
+}
+
+join_condition = {
+    ^"ON" ~ expression
+}
+
+select_from = {
+  table_factor ~ (("," ~ table_factor) | join_table)
+}
+
+select_statement = {
+  ^"SELECT" ~ select_value ~ ("," ~ select_value)*
+   ~ ^"FROM" ~ select_from }
+
+
+statements = {
+  SOI ~ (
+    (
+      select_statement | create_table
+    ) ~ ";"
+  )*
+  ~ EOI
+}
+
+main = { SOI ~ create_table ~ EOI }
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "--" ~ (!"\n" ~ ANY)* }
